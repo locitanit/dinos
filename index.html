@@ -44,7 +44,7 @@ const BOSS_HP         = 3;                     // hits to defeat boss
 const BOSS_REWARD     = 500;                   // bonus score for defeating boss
 const BOSS_CRUISE_X   = 620;                   // boss resting x position (right side)
 const BOSS_CHARGE_SPD = 0.45;                  // px/ms when charging toward dino
-const BOSS_RETREAT_SPD= 0.25;                  // px/ms retreating back
+const BOSS_RETREAT_SPD= 0.10;                  // px/ms retreating back (slow, so player can stomp)
 const BOSS_CRUISE_MIN = 2500;                  // min ms between charges
 const BOSS_CRUISE_MAX = 5000;                  // max ms between charges
 const BOSS_STUN_MS    = 1500;                  // boss stunned after stomp
@@ -624,9 +624,9 @@ function update(dt){
   }
   meteors = meteors.filter(m => m.y < DESIGN_H + 40);
 
-  // Obstacles
+  // Obstacles (skip spawning during boss fight)
   nextObsDist -= speed * dt;
-  if(nextObsDist <= 0) spawnObstacle();
+  if(nextObsDist <= 0 && !boss) spawnObstacle();
 
   for(const o of obstacles){
     o.x -= speed * dt;
@@ -747,7 +747,7 @@ function updateBoss(dt, dBox){
     if(boss.cruiseTimer <= 0){
       // Start charging toward the dino!
       boss.phase = 'charging';
-      boss.chargeTargetX = dino.x + dino.w + 5; // charge to just past the dino
+      boss.chargeTargetX = dino.x - 20; // charge past the dino so it's easy to stomp
     }
     return;
   }
