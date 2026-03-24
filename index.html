@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Dino Runner</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;background:#f7f7f7;font-family:'Courier New',monospace;touch-action:none;-webkit-tap-highlight-color:transparent}
+  body{display:flex;align-items:center;justify-content:center;flex-direction:column}
+  #wrapper{position:relative;width:100%;max-width:800px;padding:0 12px}
+  canvas{display:block;width:100%;height:auto;image-rendering:pixelated;image-rendering:crisp-edges}
+  #score-board{position:absolute;top:8px;right:20px;font-size:14px;color:#535353;letter-spacing:1px;user-select:none;pointer-events:none;z-index:2}
+  #score-board span{margin-left:16px}
+  @media(max-width:500px){#score-board{font-size:11px;top:4px;right:14px}}
+  @media(prefers-color-scheme:dark){html,body{background:#1a1a1a}}
+</style>
+</head>
+<body>
+<div id="wrapper">
+  <div id="score-board"><span id="hi"></span><span id="sc">00000</span></div>
+  <canvas id="c" aria-label="Dino runner game"></canvas>
+</div>
+<script>
+(function(){
+"use strict";
+
+/* ── CONFIG ─────────────────────────────────────────── */
+const DESIGN_W = 800, DESIGN_H = 200;
+const GROUND_Y = 170;                       // where the ground line sits
+const GRAVITY  = 0.0012;                     // px / ms²
+const JUMP_VEL = -0.58;                      // px / ms
+const FAST_FALL = 0.0024;
+const INIT_SPEED = 0.3;                      // px / ms
+const MAX_SPEED  = 0.85;
+const ACCEL      = 0.000008;                 // speed increase / ms
+const MIN_GAP = 400, MAX_GAP = 900;          // px between obstacles
+const NIGHT_TOGGLE = 700;                    // score interval
+
+/* ── CANVAS ─────────────────────────────────────────── */
+const canvas = document.getElementById("c");
+const ctx    = canvas.getContext("2d");
+const scoreEl = document.getElementById("sc");
+const hiEl    = document.getElementById("hi");
+
+function resize(){
+  const w = canvas.parentElement.clientWidth;
+  const ratio = w / DESIGN_W;
+  canvas.width  = DESIGN_W;
+  canvas.height = DESIGN_H;
+  canvas.style.width  = w + "px";
+  canvas.style.height = (DESIGN_H * ratio) + "px";
+}
+resize();
+window.addEventListener("resize", resize);
+
+/* ── SPRITES (drawn procedurally) ──────────────────── */
+// Tiny pixel arrays:  1 = fill, 0 = empty
+// Dino body (standing / frame-neutral) 20×22
+const DINO_W = 20, DINO_H = 22;
+const dinoBitmap = [
+  "00000000001111110000",
+  "00000000011111111100",
+  "00000000011111111100",
+  "00000000011100111100",
+  "00000000011111111100",
+  "00000000011111111100",
+  "00000000011111111100",
+  "01000000011111100000",
+  "01000001111111111000",
+  "11000001111111111000",
+  "11100011111111110000",
+  "11110011111111110000",
+  "11111111111111100000",
+  "11111111111111100000",
+  "01111111111111000000",
+  "00111111111111000000",
+  "00011111111110000000",
+  "00001111111100000000",
+  "00000111011100000000",
+  "00000110001100000000",
+  "00000110001100000000",
+  "00000111001110000000",
+];
+// running legs – frame A: left forward, right back
+const dinoLegsA = [
+  "00000111011100000000",
+  "00000110001000000000",
+  "00000110000000000000",
+  "00000111000000000000",
+];
+// running legs – frame B
+const dinoLegsB = [
+  "00000111011100000000",
+  "00000010001100000000",
+  "00000000001100000000",
+  "00000000001110000000",
+];
+// ducking dino 29×14
+const DUCK_W = 29, DUCK_H = 14;
+const dinoDuckBitmap = [
+  "00000000000000000000001111100",
+  "00000000000000000000011111111",
+  "00000000000000000000011111111",
+  "00000000000000000000011100111",
+  "00000000000000000000011111111",
+  "11000000000000000000011111111",
+  "11100011111111111111111111111",
+  "11110011111111111111111110000",
+  "11111111111111111111111100000",
+  "01111111111111111111111000000",
+  "00111111111111111111110000000",
+  "00011111111111111100000000000",
+  "00000110001100000000000000000",
+  "00000111001110000000000000000",
+];
+const duckLegsA = [
+  "00000110001000000000000000000",
+  "00000111000000000000000000000",
+];
+const duckLegsB = [
+  "00000010001100000000000000000",
+  "00000000001110000000000000000",
+];
+
+// Small cactus 12×24
+const cactusSmall = [
+  "000011110000",
+  "000011110000",
+  "000011110000",
+  "010011110000",
+  "010011110000",
+  "010011110100",
+  "010011110100",
+  "011011110100",
+  "011011110110",
+  "011111110110",
+  "011111111110",
+  "011111111110",
+  "001111111100",
+  "000111111000",
+  "000011110000",
+  "000011110000",
+  "000011110000",
+  "000011110000",
+  "000011110000",
+  "000011110000",
+  "000011110000",
+  "000011110000",
+  "000011110000",
+  "000011110000",
+];
+
+// Large cactus 16×32
+const cactusLarge = [
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+  "0100001111000000",
+  "0100001111000000",
+  "0100001111000100",
+  "0110001111001100",
+  "0110001111001100",
+  "0110001111001100",
+  "0111001111011100",
+  "0111101111011100",
+  "0111111111111100",
+  "0111111111111100",
+  "0011111111111000",
+  "0001111111110000",
+  "0000111111100000",
+  "0000011111100000",
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+  "0000001111000000",
+];
+
+// Pterodactyl frames 23×16
+const ptero1 = [
+  "00000000000010000000000",
+  "00000000000011000000000",
+  "00000000000011100000000",
+  "00000000000011110000000",
+  "00000000000011111000000",
+  "10000000000011111100000",
+  "11000000000011111110000",
+  "11111111111111111111000",
+  "01111111111111111111100",
+  "00011111111111111111110",
+  "00000011111111100001111",
+  "00000000011111100000000",
+  "00000000000111100000000",
+  "00000000000011000000000",
+  "00000000000010000000000",
+  "00000000000000000000000",
+];
+const ptero2 = [
+  "00000000000000000000000",
+  "00000000000010000000000",
+  "00000000000011000000000",
+  "00000000000011100000000",
+  "00000000000011110000000",
+  "10000000000011111000000",
+  "11111111111111111111000",
+  "01111111111111111111100",
+  "00011111111111111111110",
+  "00000011111111100001111",
+  "00000000011111100000000",
+  "00000000000111100000000",
+  "00000000000011100000000",
+  "00000000000011110000000",
+  "00000000000011111000000",
+  "00000000000010000000000",
+];
+
+// Cloud 26×8
+const cloudBitmap = [
+  "00000001111100000000000000",
+  "00000111111111000000000000",
+  "00001111111111100000000000",
+  "01111111111111111100011100",
+  "11111111111111111111111110",
+  "11111111111111111111111111",
+  "01111111111111111111111110",
+  "00011111111111111111111000",
+];
+
+// Star (for night) 5×5
+const starBitmap = [
+  "00100",
+  "01110",
+  "11111",
+  "01110",
+  "00100",
+];
+
+// Moon 10×10
+const moonBitmap = [
+  "0001111100",
+  "0011111110",
+  "0111111111",
+  "0111111111",
+  "1111111111",
+  "1111111111",
+  "0111111111",
+  "0111111111",
+  "0011111110",
+  "0001111100",
+];
+
+/* Helper: draw a bitmap grid at (x,y) with pixel size s */
+function drawBitmap(bmp, x, y, s, color){
+  ctx.fillStyle = color;
+  for(let r=0;r<bmp.length;r++){
+    const row = bmp[r];
+    for(let c=0;c<row.length;c++){
+      if(row[c]==='1') ctx.fillRect(x+c*s, y+r*s, s, s);
+    }
+  }
+}
+
+/* ── GAME STATE ─────────────────────────────────────── */
+const STATE = {IDLE:0, PLAYING:1, OVER:2};
+let state = STATE.IDLE;
+let speed, score, hiScore, dist, nightMode, nightAlpha;
+let lastTime;
+
+hiScore = parseInt(localStorage.getItem("dinoHi"))||0;
+if(hiScore) hiEl.textContent = "HI " + String(hiScore).padStart(5,"0");
+
+/* ── DINO ───────────────────────────────────────────── */
+let dino = {};
+function resetDino(){
+  dino = {x:40, y:GROUND_Y, vy:0, w:DINO_W*2, h:DINO_H*2,
+          jumping:false, ducking:false, frame:0, frameTimer:0, blinkTimer:0, blinkShow:true};
+}
+resetDino();
+
+/* ── GROUND ─────────────────────────────────────────── */
+let groundX = 0;
+const bumpPattern = [];       // random bump positions
+(function initBumps(){
+  for(let i=0;i<200;i++) bumpPattern.push(Math.random()*DESIGN_W*3);
+  bumpPattern.sort((a,b)=>a-b);
+})();
+
+/* ── CLOUDS ─────────────────────────────────────────── */
+let clouds = [];
+function spawnCloud(){
+  clouds.push({x:DESIGN_W+Math.random()*200, y:20+Math.random()*60, speed:0.02+Math.random()*0.03});
+}
+for(let i=0;i<3;i++){clouds.push({x:100+Math.random()*600, y:20+Math.random()*60, speed:0.02+Math.random()*0.03});}
+
+/* ── STARS (night) ──────────────────────────────────── */
+let stars = [];
+for(let i=0;i<12;i++) stars.push({x:Math.random()*DESIGN_W, y:5+Math.random()*80});
+let moonX = 600;
+
+/* ── OBSTACLES ──────────────────────────────────────── */
+let obstacles = [];
+let nextObsDist = 0;
+const OBS_TYPES = {
+  CACTUS_S:  {bitmap:cactusSmall, w:12, h:24, scale:2, groundOffset:0},
+  CACTUS_L:  {bitmap:cactusLarge, w:16, h:32, scale:2, groundOffset:0},
+  PTERO:     {bitmap:ptero1,       w:23, h:16, scale:2, groundOffset:0},
+};
+
+function spawnObstacle(){
+  let type;
+  const r = Math.random();
+  if(score > 250 && r < 0.2) type = "PTERO";
+  else if(r < 0.55) type = "CACTUS_S";
+  else type = "CACTUS_L";
+
+  const t = OBS_TYPES[type];
+  const pw = t.w * t.scale;
+  const ph = t.h * t.scale;
+  let oy = GROUND_Y - ph + 2;
+  if(type === "PTERO"){
+    const altitudes = [GROUND_Y - ph - 10, GROUND_Y - ph - 36, GROUND_Y - ph + 6];
+    oy = altitudes[Math.floor(Math.random()*altitudes.length)];
+  }
+
+  // sometimes cluster 2-3 small cacti
+  let count = 1;
+  if(type==="CACTUS_S" && Math.random()<0.4) count = 2;
+  if(type==="CACTUS_S" && Math.random()<0.15) count = 3;
+
+  for(let i=0;i<count;i++){
+    obstacles.push({type, x:DESIGN_W + 20 + i*(pw-4), y:oy, w:pw, h:ph, frame:0, frameTimer:0});
+  }
+  nextObsDist = MIN_GAP + Math.random()*(MAX_GAP - MIN_GAP);
+}
+
+/* ── COLLISION ──────────────────────────────────────── */
+function collides(a,b){
+  // shrink hitboxes for fairness
+  const m = 6;
+  return a.x+m < b.x+b.w-m && a.x+a.w-m > b.x+m && a.y+m < b.y+b.h-m && a.y+a.h-m > b.y+m;
+}
+
+/* ── AUDIO (Web Audio tiny beeps) ──────────────────── */
+let audioCtx;
+function beep(freq, dur){
+  try{
+    if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination);
+    o.type="square"; o.frequency.value=freq;
+    g.gain.value=0.08;
+    o.start(); o.stop(audioCtx.currentTime+dur);
+  }catch(e){}
+}
+
+/* ── RESET / START ──────────────────────────────────── */
+function startGame(){
+  state = STATE.PLAYING;
+  speed = INIT_SPEED;
+  score = 0; dist = 0;
+  nightMode = false; nightAlpha = 0;
+  obstacles = [];
+  nextObsDist = 300;
+  groundX = 0;
+  resetDino();
+  lastTime = performance.now();
+}
+
+/* ── INPUT ──────────────────────────────────────────── */
+const keys = {};
+document.addEventListener("keydown", function(e){
+  if(e.code==="Space"||e.code==="ArrowUp"||e.code==="ArrowDown"){
+    e.preventDefault();
+    keys[e.code] = true;
+    handleAction(e.code==="ArrowDown"?"duck":"jump");
+  }
+});
+document.addEventListener("keyup", function(e){
+  keys[e.code] = false;
+  if(e.code==="ArrowDown") dino.ducking = false;
+});
+
+// Touch
+let touchStartY = 0;
+canvas.addEventListener("touchstart", function(e){
+  e.preventDefault();
+  touchStartY = e.touches[0].clientY;
+  handleAction("jump");
+},{passive:false});
+canvas.addEventListener("touchmove", function(e){
+  e.preventDefault();
+  if(e.touches[0].clientY - touchStartY > 30){
+    handleAction("duck");
+  }
+},{passive:false});
+canvas.addEventListener("touchend", function(e){
+  e.preventDefault();
+  dino.ducking = false;
+},{passive:false});
+
+// Mouse click
+canvas.addEventListener("mousedown", function(){ handleAction("jump"); });
+
+function handleAction(action){
+  if(state === STATE.IDLE){
+    startGame();
+    if(action==="jump") doJump();
+    return;
+  }
+  if(state === STATE.OVER){
+    startGame();
+    return;
+  }
+  if(action==="jump") doJump();
+  if(action==="duck") dino.ducking = true;
+}
+
+function doJump(){
+  if(!dino.jumping && dino.y >= GROUND_Y){
+    dino.jumping = true;
+    dino.vy = JUMP_VEL;
+    dino.ducking = false;
+    beep(400, 0.05);
+  }
+}
+
+/* ── UPDATE ─────────────────────────────────────────── */
+function update(dt){
+  if(state !== STATE.PLAYING) return;
+
+  // Speed
+  speed = Math.min(MAX_SPEED, speed + ACCEL * dt);
+
+  // Score
+  dist += speed * dt;
+  const newScore = Math.floor(dist / 15);
+  if(newScore !== score){
+    const prev100 = Math.floor(score/100);
+    score = newScore;
+    if(Math.floor(score/100)>prev100){
+      beep(600,0.06);
+      setTimeout(()=>beep(900,0.08),80);
+    }
+  }
+  scoreEl.textContent = String(score).padStart(5,"0");
+
+  // Night mode
+  const nightTarget = (Math.floor(score / NIGHT_TOGGLE) % 2 === 1);
+  if(nightTarget && nightAlpha<1) nightAlpha = Math.min(1, nightAlpha + 0.002*dt);
+  else if(!nightTarget && nightAlpha>0) nightAlpha = Math.max(0, nightAlpha - 0.002*dt);
+  nightMode = nightAlpha > 0;
+
+  // Dino physics
+  const grav = (dino.ducking && dino.vy < 0) ? FAST_FALL : (keys["ArrowDown"] && dino.jumping ? FAST_FALL : GRAVITY);
+  dino.vy += grav * dt;
+  dino.y  += dino.vy * dt;
+  if(dino.y >= GROUND_Y){
+    dino.y = GROUND_Y;
+    dino.vy = 0;
+    dino.jumping = false;
+  }
+
+  // Dino hitbox size
+  if(dino.ducking && !dino.jumping){
+    dino.w = DUCK_W*2; dino.h = DUCK_H*2;
+  } else {
+    dino.w = DINO_W*2; dino.h = DINO_H*2;
+  }
+
+  // Dino animation frame
+  dino.frameTimer += dt;
+  if(dino.frameTimer > 120){
+    dino.frameTimer = 0;
+    dino.frame = 1 - dino.frame;
+  }
+
+  // Ground scroll
+  groundX -= speed * dt;
+  if(groundX < -DESIGN_W) groundX += DESIGN_W;
+
+  // Clouds scroll
+  for(const c of clouds) c.x -= c.speed * dt;
+  clouds = clouds.filter(c => c.x > -60);
+  if(clouds.length < 4 && Math.random() < 0.001*dt) spawnCloud();
+
+  // Obstacles
+  nextObsDist -= speed * dt;
+  if(nextObsDist <= 0) spawnObstacle();
+
+  for(const o of obstacles){
+    o.x -= speed * dt;
+    o.frameTimer = (o.frameTimer||0)+dt;
+    if(o.frameTimer>200){o.frameTimer=0; o.frame=1-o.frame;}
+  }
+  obstacles = obstacles.filter(o => o.x + o.w > -50);
+
+  // Collision
+  const dx = dino.x;
+  const dy = dino.y - dino.h + 2;
+  const dw = dino.w;
+  const dh = dino.h;
+  const dBox = {x:dx, y:dy, w:dw, h:dh};
+  for(const o of obstacles){
+    if(collides(dBox, o)){
+      gameOver();
+      return;
+    }
+  }
+}
+
+function gameOver(){
+  state = STATE.OVER;
+  if(score > hiScore){
+    hiScore = score;
+    localStorage.setItem("dinoHi", hiScore);
+  }
+  hiEl.textContent = "HI " + String(hiScore).padStart(5,"0");
+  beep(200, 0.15);
+}
+
+/* ── DRAW ───────────────────────────────────────────── */
+function draw(){
+  const bgColor = lerpColor("#f7f7f7","#1a1a1a", nightAlpha||0);
+  const fgColor = lerpColor("#535353","#e0e0e0", nightAlpha||0);
+  const groundColor = lerpColor("#535353","#e0e0e0", nightAlpha||0);
+
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0,0,DESIGN_W,DESIGN_H);
+
+  // Score board colour
+  const sb = document.getElementById("score-board");
+  sb.style.color = fgColor;
+
+  // Stars & moon (night)
+  if(nightMode){
+    for(const s of stars) drawBitmap(starBitmap, s.x, s.y, 1.5, fgColor);
+    drawBitmap(moonBitmap, moonX, 15, 2, fgColor);
+  }
+
+  // Clouds
+  const cloudCol = lerpColor("#c4c4c4","#3a3a3a", nightAlpha||0);
+  for(const c of clouds) drawBitmap(cloudBitmap, c.x, c.y, 1.5, cloudCol);
+
+  // Ground line
+  ctx.strokeStyle = groundColor;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, GROUND_Y+2);
+  ctx.lineTo(DESIGN_W, GROUND_Y+2);
+  ctx.stroke();
+
+  // Ground bumps
+  ctx.fillStyle = groundColor;
+  for(const bx of bumpPattern){
+    const rx = ((bx + groundX) % (DESIGN_W*3));
+    const drawX = rx < 0 ? rx + DESIGN_W*3 : rx;
+    if(drawX < DESIGN_W){
+      const sz = (bx % 3 === 0) ? 2 : 1;
+      ctx.fillRect(drawX, GROUND_Y + 4 + (bx%5), sz, sz);
+    }
+  }
+
+  // Obstacles
+  for(const o of obstacles){
+    if(o.type === "PTERO"){
+      drawBitmap(o.frame===0 ? ptero1 : ptero2, o.x, o.y, 2, fgColor);
+    } else {
+      drawBitmap(OBS_TYPES[o.type].bitmap, o.x, o.y, 2, fgColor);
+    }
+  }
+
+  // Dino
+  const dinoDrawY = dino.y - (dino.ducking && !dino.jumping ? DUCK_H*2 : DINO_H*2) + 2;
+  if(state === STATE.IDLE){
+    // Idle pose with blinking
+    dino.blinkTimer = (dino.blinkTimer||0) + 16;
+    if(dino.blinkTimer > 3000){ dino.blinkShow = false; }
+    if(dino.blinkTimer > 3150){ dino.blinkShow = true; dino.blinkTimer = 0; }
+    const body = dinoBitmap.slice(0, 18);
+    drawBitmap(body, dino.x, GROUND_Y - DINO_H*2 + 2, 2, fgColor);
+    // legs standing still
+    const legs = ["00000110001100000000","00000110001100000000","00000111001110000000"];
+    drawBitmap(legs, dino.x, GROUND_Y - DINO_H*2 + 2 + 18*2, 2, fgColor);
+    // blink – draw eye area background
+    if(!dino.blinkShow){
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(dino.x + 12*2, GROUND_Y - DINO_H*2 + 2 + 2*2, 4, 4);
+      ctx.fillStyle = fgColor;
+    }
+  } else if(dino.ducking && !dino.jumping){
+    const body = dinoDuckBitmap.slice(0, 12);
+    drawBitmap(body, dino.x, dinoDrawY, 2, fgColor);
+    drawBitmap(dino.frame === 0 ? duckLegsA : duckLegsB, dino.x, dinoDrawY + 12*2, 2, fgColor);
+  } else {
+    const body = dinoBitmap.slice(0, 18);
+    drawBitmap(body, dino.x, dinoDrawY, 2, fgColor);
+    if(dino.jumping){
+      // legs static while jumping
+      const legs = ["00000110001100000000","00000110001100000000","00000111001110000000"];
+      drawBitmap(legs, dino.x, dinoDrawY + 18*2, 2, fgColor);
+    } else {
+      drawBitmap(dino.frame === 0 ? dinoLegsA : dinoLegsB, dino.x, dinoDrawY + 18*2, 2, fgColor);
+    }
+  }
+
+  // IDLE message
+  if(state === STATE.IDLE){
+    ctx.fillStyle = fgColor;
+    ctx.font = "bold 16px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("Press SPACE or Tap to Start", DESIGN_W/2, GROUND_Y - 60);
+    ctx.textAlign = "left";
+  }
+
+  // GAME OVER overlay
+  if(state === STATE.OVER){
+    ctx.fillStyle = fgColor;
+    ctx.font = "bold 20px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("G A M E   O V E R", DESIGN_W/2, GROUND_Y/2 - 16);
+
+    // Restart icon (circular arrow)
+    const cx = DESIGN_W/2, cy = GROUND_Y/2 + 16, r=14;
+    ctx.strokeStyle = fgColor;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, -Math.PI*0.8, Math.PI*0.6);
+    ctx.stroke();
+    // Arrow head
+    const ax = cx + r * Math.cos(Math.PI*0.6);
+    const ay = cy + r * Math.sin(Math.PI*0.6);
+    ctx.beginPath();
+    ctx.moveTo(ax-5, ay-6);
+    ctx.lineTo(ax, ay);
+    ctx.lineTo(ax+6, ay-4);
+    ctx.stroke();
+
+    ctx.textAlign = "left";
+  }
+}
+
+/* ── COLOUR HELPERS ─────────────────────────────────── */
+function lerpColor(a, b, t){
+  const pa = hexToRgb(a), pb = hexToRgb(b);
+  const r = Math.round(pa.r + (pb.r-pa.r)*t);
+  const g = Math.round(pa.g + (pb.g-pa.g)*t);
+  const bl= Math.round(pa.b + (pb.b-pa.b)*t);
+  return `rgb(${r},${g},${bl})`;
+}
+function hexToRgb(h){
+  const v = parseInt(h.slice(1),16);
+  return {r:(v>>16)&255, g:(v>>8)&255, b:v&255};
+}
+
+/* ── MAIN LOOP ──────────────────────────────────────── */
+function loop(now){
+  requestAnimationFrame(loop);
+  if(!lastTime) lastTime = now;
+  let dt = now - lastTime;
+  lastTime = now;
+  if(dt > 200) dt = 16; // tab-switch guard
+
+  update(dt);
+  draw();
+}
+
+lastTime = performance.now();
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
