@@ -29,7 +29,7 @@
 const DESIGN_W = 800, DESIGN_H = 200;
 const GROUND_Y = 170;                       // where the ground line sits
 const GRAVITY  = 0.0022;                     // px / ms² (snappier arc)
-const JUMP_VEL = -0.52;                      // px / ms  (lower, faster jump)
+const JUMP_VEL = -0.68;                      // px / ms  (higher jump)
 const FAST_FALL = 0.0044;
 const INIT_SPEED = 0.3;                      // px / ms
 const MAX_SPEED  = 0.85;
@@ -749,20 +749,29 @@ function draw(){
     ctx.fillText("G A M E   O V E R", DESIGN_W/2, GROUND_Y/2 - 16);
 
     // Restart icon (circular arrow)
-    const cx = DESIGN_W/2, cy = GROUND_Y/2 + 16, r=14;
+    const cx = DESIGN_W/2, cy = GROUND_Y/2 + 16, r=18;
     ctx.strokeStyle = fgColor;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.arc(cx, cy, r, -Math.PI*0.8, Math.PI*0.6);
+    ctx.arc(cx, cy, r, -Math.PI*0.75, Math.PI*0.55, false);
     ctx.stroke();
-    // Arrow head
-    const ax = cx + r * Math.cos(Math.PI*0.6);
-    const ay = cy + r * Math.sin(Math.PI*0.6);
+    // Arrow head (filled, tangent-aligned)
+    const endAngle = Math.PI*0.55;
+    const ax = cx + r * Math.cos(endAngle);
+    const ay = cy + r * Math.sin(endAngle);
+    // tangent direction (clockwise arc)
+    const tx = Math.sin(endAngle);
+    const ty = -Math.cos(endAngle);
+    // perpendicular to tangent
+    const px = -ty, py = tx;
+    const arrowLen = 10, arrowW = 5;
+    ctx.fillStyle = fgColor;
     ctx.beginPath();
-    ctx.moveTo(ax-5, ay-6);
-    ctx.lineTo(ax, ay);
-    ctx.lineTo(ax+6, ay-4);
-    ctx.stroke();
+    ctx.moveTo(ax + tx*arrowLen, ay + ty*arrowLen);
+    ctx.lineTo(ax - px*arrowW, ay - py*arrowW);
+    ctx.lineTo(ax + px*arrowW, ay + py*arrowW);
+    ctx.closePath();
+    ctx.fill();
 
     ctx.textAlign = "left";
   }
