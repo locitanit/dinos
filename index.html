@@ -51,6 +51,8 @@ const BOSS_STUN_MS    = 1500;                  // boss stunned after stomp
 const BOSS_INVINCIBLE_MS = 1500;               // dino invincible after stomp
 const BOSS_INTRO_MS   = 1500;                  // intro text display time
 const BOSS_VICTORY_MS = 1500;                  // victory text display time
+const BOSS_FIREBALL_SPD = 0.4;                 // px/ms fireball speed
+const BOSS_FIREBALL_INTERVAL = 2500;           // ms between fireballs (base)
 
 /* ── CANVAS ─────────────────────────────────────────── */
 const canvas = document.getElementById("c");
@@ -314,6 +316,13 @@ const bossLegsB = [
   "0000000001111000000000",
 ];
 
+const fireballBitmap = [
+  "0110",
+  "1111",
+  "1111",
+  "0110",
+];
+
 /* Helper: draw a bitmap grid at (x,y) with pixel size s */
 function drawBitmap(bmp, x, y, s, color){
   ctx.fillStyle = color;
@@ -335,6 +344,7 @@ let lastTime;
 let boss = null;                // null = no boss active
 let nextBossScore = BOSS_INTERVAL;
 let dinoInvincibleTimer = 0;    // after stomping boss, dino can't be hurt
+let bossCount = 0;              // number of bosses encountered (difficulty scaling)
 
 hiScore = parseInt(localStorage.getItem("dinoHi"))||0;
 if(hiScore) hiEl.textContent = "HI " + String(hiScore).padStart(5,"0");
@@ -483,6 +493,7 @@ function startGame(){
   boss = null;
   nextBossScore = BOSS_INTERVAL;
   dinoInvincibleTimer = 0;
+  bossCount = 0;
   resetDino();
   lastTime = performance.now();
 }
@@ -685,18 +696,27 @@ function gameOver(){
 /* ── BOSS FIGHT (runs during PLAYING state) ─────────── */
 function enterBoss(){
   const bw = BOSS_BW * 3, bh = BOSS_BH * 3;
+  const level = bossCount;  // 0-based difficulty level
+  bossCount++;
+  const fbInterval = BOSS_FIREBALL_INTERVAL * Math.max(0.35, 1 - level * 0.1);
   boss = {
     x: DESIGN_W + 20, y: GROUND_Y,
     w: bw, h: bh,
     hp: BOSS_HP,
-    phase: 'intro',         // intro -> cruising -> charging -> retreating -> stunned -> cruising ... or victory
+    phase: 'intro',
     introTimer: BOSS_INTRO_MS,
     cruiseTimer: 0,
     stunTimer: 0,
     victoryTimer: 0,
-    hitFlash: 0,            // visual flash when hit
+    hitFlash: 0,
     frame: 0, frameTimer: 0,
-    chargeTargetX: 0,       // where to charge to
+    chargeTargetX: 0,
+    // Difficulty scaling
+    level: level,
+    chargeSpd: BOSS_CHARGE_SPD * (1 + level * 0.12),
+    fireballInterval: fbInterval,
+    fireballTimer: fbInterval,
+    fireballs: [],
   };
   beep(300, 0.1);
   setTimeout(()=>beep(250, 0.1), 120);
@@ -712,6 +732,10 @@ function updateBoss(dt, dBox){
     boss.frame = 1 - boss.frame;
   }
   if(boss.hitFlash > 0) boss.hitFlash -= dt;
+
+  // Always update fireballs (move + collision) regardless of phase
+  updateFireballs(dt, dBox);
+  if(!boss) return; // fireball may have triggered game over
 
   // ── INTRO: boss runs in from right to cruise position
   if(boss.phase === 'intro'){
@@ -744,17 +768,24 @@ function updateBoss(dt, dBox){
     // Keep boss at cruise position (scrolling with game)
     boss.x += (BOSS_CRUISE_X - boss.x) * 0.005 * dt;
     boss.cruiseTimer -= dt;
+    // Shoot fireballs
+    boss.fireballTimer -= dt;
+    if(boss.fireballTimer <= 0){
+      boss.fireballTimer = boss.fireballInterval;
+      const bossDrawY = boss.y - boss.h + 2;
+      boss.fireballs.push({x: boss.x, y: bossDrawY + 11*3, w: 8, h: 8});
+      beep(180, 0.06);
+    }
     if(boss.cruiseTimer <= 0){
-      // Start charging toward the dino!
       boss.phase = 'charging';
-      boss.chargeTargetX = dino.x - 20; // charge past the dino so it's easy to stomp
+      boss.chargeTargetX = dino.x - 20;
     }
     return;
   }
 
   // ── CHARGING: boss rushes left toward dino
   if(boss.phase === 'charging'){
-    boss.x -= BOSS_CHARGE_SPD * dt;
+    boss.x -= boss.chargeSpd * dt;
     // Stop when past the dino or reached target
     if(boss.x <= boss.chargeTargetX){
       boss.phase = 'retreating';
@@ -787,6 +818,24 @@ function updateBoss(dt, dBox){
       boss.cruiseTimer = BOSS_CRUISE_MIN * 0.5 + Math.random() * BOSS_CRUISE_MAX * 0.5;
     }
     return;
+  }
+}
+
+function updateFireballs(dt, dBox){
+  if(!boss) return;
+  for(let i = boss.fireballs.length - 1; i >= 0; i--){
+    const fb = boss.fireballs[i];
+    fb.x -= BOSS_FIREBALL_SPD * dt;
+    // Off-screen removal
+    if(fb.x + fb.w < 0){
+      boss.fireballs.splice(i, 1);
+      continue;
+    }
+    // Collision with dino
+    if(dinoInvincibleTimer <= 0 && collides(dBox, fb)){
+      gameOver();
+      return;
+    }
   }
 }
 
@@ -1056,6 +1105,24 @@ function drawBoss(fgColor, bgColor){
         : lerpColor("#cccccc","#444444", nightAlpha||0);
       drawHeart(hpStartX + i * 14 + 6, hpY, 6);
     }
+  }
+
+  // Fireballs
+  const fbColor = lerpColor("#cc3300","#ff6633", nightAlpha||0);
+  const fbGlow  = lerpColor("#ff9900","#ffcc33", nightAlpha||0);
+  for(const fb of boss.fireballs){
+    // Glow
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = fbGlow;
+    ctx.beginPath();
+    ctx.arc(fb.x + 4, fb.y + 4, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    // Core
+    drawBitmap(fireballBitmap, fb.x, fb.y, 2, fbColor);
+    // Bright center
+    ctx.fillStyle = fbGlow;
+    ctx.fillRect(fb.x + 2, fb.y + 2, 4, 4);
   }
 
   // "!" warning when about to charge
