@@ -28,7 +28,7 @@
 /* ── CONFIG ─────────────────────────────────────────── */
 const DESIGN_W = 800, DESIGN_H = 200;
 const GROUND_Y = 170;                       // where the ground line sits
-const GRAVITY  = 0.0022;                     // px / ms² (snappier arc)
+const GRAVITY  = 0.0018;                     // px / ms² (snappier arc)
 const JUMP_VEL = -0.68;                      // px / ms  (higher jump)
 const FAST_FALL = 0.0044;
 const INIT_SPEED = 0.3;                      // px / ms
@@ -39,6 +39,13 @@ const NIGHT_TOGGLE = 700;                    // score interval
 const METEOR_MIN_INTERVAL = 8000;            // ms min between meteor showers
 const METEOR_MAX_INTERVAL = 18000;           // ms max
 const METEOR_SPEED = 0.35;                   // px/ms diagonal speed
+const BOSS_INTERVAL  = 1000;                  // score interval for boss fights
+const BOSS_HP        = 3;                     // hits to defeat boss
+const BOSS_REWARD    = 500;                   // bonus score for defeating boss
+const BOSS_SPEED     = 0.06;                  // boss movement speed px/ms
+const DINO_MOVE_SPEED = 0.18;                 // dino horizontal speed during boss px/ms
+const BOSS_INTRO_MS  = 2000;                  // intro text display time
+const BOSS_VICTORY_MS = 1500;                 // victory text display time
 
 /* ── CANVAS ─────────────────────────────────────────── */
 const canvas = document.getElementById("c");
@@ -263,6 +270,45 @@ const moonBitmap = [
   "0001111100",
 ];
 
+// Boss body 22×22 at scale 3 = 66×66px
+const BOSS_BW = 22, BOSS_BH = 26;
+const bossBitmapBody = [
+  "0010000011111100001000",
+  "0011000111111110001100",
+  "0001101111111111110000",
+  "0000011111111111110000",
+  "0000011111111111100000",
+  "0000011111111111100000",
+  "0000011111111111100000",
+  "0000001111111111110000",
+  "0000001111111111111100",
+  "0000001111101010111000",
+  "0000000111111111110000",
+  "0000001111111110000000",
+  "0000011111111110000000",
+  "0100111111111111000000",
+  "0101111111111111100000",
+  "1111111111111111110000",
+  "1111111111111111110000",
+  "0111111111111111110000",
+  "0011111111111111100000",
+  "0001111111111111000000",
+  "0000111111111110000000",
+  "0000011111111100000000",
+];
+const bossLegsA = [
+  "0000011100111100000000",
+  "0000011000011000000000",
+  "0000011000000000000000",
+  "0000111100000000000000",
+];
+const bossLegsB = [
+  "0000011100111100000000",
+  "0000000000111000000000",
+  "0000000000110000000000",
+  "0000000001111000000000",
+];
+
 /* Helper: draw a bitmap grid at (x,y) with pixel size s */
 function drawBitmap(bmp, x, y, s, color){
   ctx.fillStyle = color;
@@ -275,10 +321,18 @@ function drawBitmap(bmp, x, y, s, color){
 }
 
 /* ── GAME STATE ─────────────────────────────────────── */
-const STATE = {IDLE:0, PLAYING:1, OVER:2};
+const STATE = {IDLE:0, PLAYING:1, OVER:2, BOSS:3};
 let state = STATE.IDLE;
 let speed, score, hiScore, dist, nightMode, nightAlpha;
 let lastTime;
+
+/* ── BOSS FIGHT STATE ───────────────────────────────── */
+let boss = null;
+let nextBossScore = BOSS_INTERVAL;
+let bossPhase = 0;          // 0=inactive, 1=intro, 2=fighting, 3=victory
+let bossIntroTimer = 0;
+let bossVictoryTimer = 0;
+let touchMoveDir = 0;       // mobile: -1 left, 0 none, 1 right
 
 hiScore = parseInt(localStorage.getItem("dinoHi"))||0;
 if(hiScore) hiEl.textContent = "HI " + String(hiScore).padStart(5,"0");
@@ -424,6 +478,10 @@ function startGame(){
   meteorTimer = 5000 + Math.random() * 8000;
   nextObsDist = 300;
   groundX = 0;
+  boss = null;
+  bossPhase = 0;
+  nextBossScore = BOSS_INTERVAL;
+  touchMoveDir = 0;
   resetDino();
   lastTime = performance.now();
 }
@@ -431,10 +489,11 @@ function startGame(){
 /* ── INPUT ──────────────────────────────────────────── */
 const keys = {};
 document.addEventListener("keydown", function(e){
-  if(e.code==="Space"||e.code==="ArrowUp"||e.code==="ArrowDown"){
+  if(e.code==="Space"||e.code==="ArrowUp"||e.code==="ArrowDown"||e.code==="ArrowLeft"||e.code==="ArrowRight"){
     e.preventDefault();
     keys[e.code] = true;
-    handleAction(e.code==="ArrowDown"?"duck":"jump");
+    if(e.code==="ArrowDown") handleAction("duck");
+    else if(e.code!=="ArrowLeft" && e.code!=="ArrowRight") handleAction("jump");
   }
 });
 document.addEventListener("keyup", function(e){
@@ -446,17 +505,27 @@ document.addEventListener("keyup", function(e){
 let touchStartY = 0;
 canvas.addEventListener("touchstart", function(e){
   e.preventDefault();
+  if(state === STATE.BOSS){
+    const rect = canvas.getBoundingClientRect();
+    const touchX = (e.touches[0].clientX - rect.left) / rect.width;
+    if(touchX < 0.33){ touchMoveDir = -1; }
+    else if(touchX > 0.66){ touchMoveDir = 1; }
+    else { doJump(); }
+    return;
+  }
   touchStartY = e.touches[0].clientY;
   handleAction("jump");
 },{passive:false});
 canvas.addEventListener("touchmove", function(e){
   e.preventDefault();
+  if(state === STATE.BOSS) return;
   if(e.touches[0].clientY - touchStartY > 30){
     handleAction("duck");
   }
 },{passive:false});
 canvas.addEventListener("touchend", function(e){
   e.preventDefault();
+  if(state === STATE.BOSS){ touchMoveDir = 0; return; }
   dino.ducking = false;
 },{passive:false});
 
@@ -471,6 +540,10 @@ function handleAction(action){
   }
   if(state === STATE.OVER){
     startGame();
+    return;
+  }
+  if(state === STATE.BOSS){
+    if(action==="jump" && bossPhase === 2) doJump();
     return;
   }
   if(action==="jump") doJump();
@@ -490,6 +563,7 @@ function doJump(){
 
 /* ── UPDATE ─────────────────────────────────────────── */
 function update(dt){
+  if(state === STATE.BOSS){ updateBoss(dt); return; }
   if(state !== STATE.PLAYING) return;
 
   // Speed
@@ -597,16 +671,176 @@ function update(dt){
       return;
     }
   }
+
+  // Boss trigger
+  if(score >= nextBossScore){
+    enterBoss();
+  }
 }
 
 function gameOver(){
   state = STATE.OVER;
+  boss = null; bossPhase = 0;
   if(score > hiScore){
     hiScore = score;
     localStorage.setItem("dinoHi", hiScore);
   }
   hiEl.textContent = "HI " + String(hiScore).padStart(5,"0");
   beep(200, 0.15);
+}
+
+/* ── BOSS FIGHT ─────────────────────────────────────── */
+function enterBoss(){
+  state = STATE.BOSS;
+  bossPhase = 1;
+  bossIntroTimer = BOSS_INTRO_MS;
+  obstacles = [];
+  meteors = [];
+  dino.ducking = false;
+  dino.y = GROUND_Y;
+  dino.vy = 0;
+  dino.jumping = false;
+  const bw = BOSS_BW * 3, bh = BOSS_BH * 3;
+  boss = {
+    x: DESIGN_W + 20, y: GROUND_Y,
+    w: bw, h: bh,
+    hp: BOSS_HP, dir: -1,
+    speed: BOSS_SPEED,
+    hitTimer: 0,
+    frame: 0, frameTimer: 0,
+    entering: true,
+    targetX: DESIGN_W - bw - 40,
+  };
+  beep(300, 0.1);
+  setTimeout(()=>beep(250, 0.1), 120);
+  setTimeout(()=>beep(200, 0.15), 240);
+}
+
+function updateBoss(dt){
+  // Night mode during boss
+  const nightTarget = (Math.floor(score / NIGHT_TOGGLE) % 2 === 1);
+  if(nightTarget && nightAlpha<1) nightAlpha = Math.min(1, nightAlpha + 0.002*dt);
+  else if(!nightTarget && nightAlpha>0) nightAlpha = Math.max(0, nightAlpha - 0.002*dt);
+  nightMode = nightAlpha > 0;
+
+  // Clouds
+  for(const c of clouds) c.x -= c.speed * dt * 0.3;
+  clouds = clouds.filter(c => c.x > -60);
+  if(clouds.length < 4 && Math.random() < 0.0003*dt) spawnCloud();
+
+  // Intro phase: boss walks in
+  if(bossPhase === 1){
+    bossIntroTimer -= dt;
+    if(boss.entering){
+      boss.x -= 0.15 * dt;
+      if(boss.x <= boss.targetX){
+        boss.x = boss.targetX;
+        boss.entering = false;
+      }
+    }
+    if(bossIntroTimer <= 0 && !boss.entering){
+      bossPhase = 2;
+    }
+    return;
+  }
+
+  // Victory phase
+  if(bossPhase === 3){
+    bossVictoryTimer -= dt;
+    boss.y += 0.08 * dt;
+    if(bossVictoryTimer <= 0){
+      bossPhase = 0;
+      boss = null;
+      nextBossScore = score + BOSS_INTERVAL;
+      state = STATE.PLAYING;
+      speed = Math.min(MAX_SPEED, INIT_SPEED + ACCEL * dist);
+      dino.x = 40;
+      nextObsDist = 600;
+      meteorTimer = 5000 + Math.random() * 8000;
+    }
+    return;
+  }
+
+  // Fighting phase (bossPhase === 2)
+  // Dino horizontal movement
+  if(keys["ArrowLeft"] || touchMoveDir === -1) dino.x -= DINO_MOVE_SPEED * dt;
+  if(keys["ArrowRight"] || touchMoveDir === 1) dino.x += DINO_MOVE_SPEED * dt;
+  dino.x = Math.max(10, Math.min(DESIGN_W - dino.w - 10, dino.x));
+
+  // Dino physics
+  dino.vy += GRAVITY * dt;
+  dino.y += dino.vy * dt;
+  if(dino.y >= GROUND_Y){
+    dino.y = GROUND_Y;
+    dino.vy = 0;
+    dino.jumping = false;
+  }
+  dino.w = DINO_W * 2;
+  dino.h = DINO_H * 2;
+
+  // Dino animation
+  dino.frameTimer += dt;
+  if(dino.frameTimer > 120){
+    dino.frameTimer = 0;
+    dino.frame = 1 - dino.frame;
+  }
+
+  // Boss movement
+  boss.x += boss.dir * boss.speed * dt;
+  if(boss.x > DESIGN_W - boss.w - 20) boss.dir = -1;
+  if(boss.x < DESIGN_W * 0.25) boss.dir = 1;
+
+  // Boss animation
+  boss.frameTimer += dt;
+  if(boss.frameTimer > 250){
+    boss.frameTimer = 0;
+    boss.frame = 1 - boss.frame;
+  }
+
+  // Boss hit timer
+  if(boss.hitTimer > 0) boss.hitTimer -= dt;
+
+  // Collision detection
+  const dinoBox = {x: dino.x, y: dino.y - dino.h + 2, w: dino.w, h: dino.h};
+  const bossDrawY = boss.y - boss.h + 2;
+  const headH = boss.h * 0.35;
+  const bodyBox = {x: boss.x + 8, y: bossDrawY + headH, w: boss.w - 16, h: boss.h - headH};
+
+  if(boss.hitTimer <= 0){
+    // Stomp check: dino falling, feet in boss head region
+    const dinoFeet = dino.y + 2;
+    const headTop = bossDrawY;
+    const hOverlap = dino.x + dino.w - 10 > boss.x + 10 && dino.x + 10 < boss.x + boss.w - 10;
+    if(dino.vy > 0 && dinoFeet >= headTop && dinoFeet <= headTop + headH + 12 && hOverlap){
+      // STOMP!
+      boss.hp--;
+      boss.hitTimer = 1000;
+      dino.vy = JUMP_VEL * 0.75;
+      dino.jumping = true;
+      beep(800, 0.08);
+      setTimeout(()=>beep(1000, 0.06), 80);
+      if(boss.hp <= 0){
+        bossPhase = 3;
+        bossVictoryTimer = BOSS_VICTORY_MS;
+        score += BOSS_REWARD;
+        dist = score * 15;
+        scoreEl.textContent = String(score).padStart(5,"0");
+        if(score > hiScore){
+          hiScore = score;
+          localStorage.setItem("dinoHi", hiScore);
+          hiEl.textContent = "HI " + String(hiScore).padStart(5,"0");
+        }
+        beep(600, 0.08);
+        setTimeout(()=>beep(800, 0.08), 100);
+        setTimeout(()=>beep(1000, 0.08), 200);
+        setTimeout(()=>beep(1200, 0.12), 300);
+      }
+    }
+    // Body collision (not a stomp)
+    else if(collides(dinoBox, bodyBox)){
+      gameOver();
+    }
+  }
 }
 
 /* ── DRAW ───────────────────────────────────────────── */
@@ -652,11 +886,13 @@ function draw(){
   }
 
   // Obstacles
-  for(const o of obstacles){
-    if(o.type === "PTERO"){
-      drawBitmap(o.frame===0 ? ptero1 : ptero2, o.x, o.y, 2, fgColor);
-    } else {
-      drawBitmap(OBS_TYPES[o.type].bitmap, o.x, o.y, 2, fgColor);
+  if(state !== STATE.BOSS){
+    for(const o of obstacles){
+      if(o.type === "PTERO"){
+        drawBitmap(o.frame===0 ? ptero1 : ptero2, o.x, o.y, 2, fgColor);
+      } else {
+        drawBitmap(OBS_TYPES[o.type].bitmap, o.x, o.y, 2, fgColor);
+      }
     }
   }
 
@@ -679,6 +915,11 @@ function draw(){
     ctx.fillRect(m.x+6, m.y+6, 6, 6);
   }
   ctx.globalAlpha = 1;
+
+  // Boss
+  if(state === STATE.BOSS && boss){
+    drawBoss(fgColor, bgColor);
+  }
 
   // Meteor warning indicator
   if(state === STATE.PLAYING){
@@ -775,6 +1016,101 @@ function draw(){
 
     ctx.textAlign = "left";
   }
+}
+
+/* ── BOSS DRAWING ───────────────────────────────────── */
+function drawBoss(fgColor, bgColor){
+  const bossDrawY = boss.y - boss.h + 2;
+  const isHit = boss.hitTimer > 0 && Math.floor(boss.hitTimer / 80) % 2 === 0;
+  const bossColor = isHit ? lerpColor("#cc0000","#ff4444", nightAlpha||0) : fgColor;
+
+  if(bossPhase === 3){
+    ctx.globalAlpha = Math.max(0, bossVictoryTimer / BOSS_VICTORY_MS);
+  }
+
+  // Body
+  drawBitmap(bossBitmapBody, boss.x, bossDrawY, 3, bossColor);
+  // Legs
+  drawBitmap(boss.frame === 0 ? bossLegsA : bossLegsB, boss.x, bossDrawY + bossBitmapBody.length * 3, 3, bossColor);
+
+  // Red eyes
+  const eyeColor = lerpColor("#cc0000","#ff3333", nightAlpha||0);
+  ctx.fillStyle = eyeColor;
+  ctx.fillRect(boss.x + 10*3, bossDrawY + 5*3, 3, 3);
+  ctx.fillRect(boss.x + 14*3, bossDrawY + 5*3, 3, 3);
+
+  ctx.globalAlpha = 1;
+
+  // HP hearts
+  if(bossPhase === 1 || bossPhase === 2){
+    const hpStartX = boss.x + boss.w/2 - (BOSS_HP * 14)/2;
+    const hpY = bossDrawY - 14;
+    for(let i = 0; i < BOSS_HP; i++){
+      ctx.fillStyle = i < boss.hp
+        ? lerpColor("#cc0000","#ff4444", nightAlpha||0)
+        : lerpColor("#cccccc","#444444", nightAlpha||0);
+      drawHeart(hpStartX + i * 14 + 6, hpY, 6);
+    }
+  }
+
+  // BOSS! text during intro
+  if(bossPhase === 1){
+    const flash = Math.floor(bossIntroTimer / 250) % 2 === 0;
+    if(flash){
+      ctx.fillStyle = lerpColor("#cc0000","#ff4444", nightAlpha||0);
+      ctx.font = "bold 28px 'Courier New', monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("B O S S !", DESIGN_W/2, 45);
+      ctx.textAlign = "left";
+    }
+  }
+
+  // VICTORY! text
+  if(bossPhase === 3){
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = lerpColor("#00aa00","#44ff44", nightAlpha||0);
+    ctx.font = "bold 22px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("VICTORY! +" + BOSS_REWARD, DESIGN_W/2, 45);
+    ctx.textAlign = "left";
+  }
+
+  // Mobile touch controls hint
+  if(bossPhase === 2){
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = fgColor;
+    // Left arrow
+    ctx.beginPath();
+    ctx.moveTo(30, GROUND_Y + 18);
+    ctx.lineTo(14, GROUND_Y + 10);
+    ctx.lineTo(30, GROUND_Y + 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.font = "8px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("\u25C0", 22, GROUND_Y + 28);
+    // Right arrow
+    ctx.beginPath();
+    ctx.moveTo(DESIGN_W - 30, GROUND_Y + 18);
+    ctx.lineTo(DESIGN_W - 14, GROUND_Y + 10);
+    ctx.lineTo(DESIGN_W - 30, GROUND_Y + 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillText("\u25B6", DESIGN_W - 22, GROUND_Y + 28);
+    // Jump hint
+    ctx.fillText("JUMP", DESIGN_W/2, GROUND_Y + 28);
+    ctx.textAlign = "left";
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawHeart(x, y, s){
+  ctx.beginPath();
+  ctx.arc(x - s*0.3, y, s*0.5, Math.PI, 0, false);
+  ctx.arc(x + s*0.3, y, s*0.5, Math.PI, 0, false);
+  ctx.lineTo(x, y + s*0.9);
+  ctx.closePath();
+  ctx.fill();
 }
 
 /* ── COLOUR HELPERS ─────────────────────────────────── */
