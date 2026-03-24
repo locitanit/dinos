@@ -28,14 +28,17 @@
 /* ── CONFIG ─────────────────────────────────────────── */
 const DESIGN_W = 800, DESIGN_H = 200;
 const GROUND_Y = 170;                       // where the ground line sits
-const GRAVITY  = 0.0012;                     // px / ms²
-const JUMP_VEL = -0.58;                      // px / ms
-const FAST_FALL = 0.0024;
+const GRAVITY  = 0.0022;                     // px / ms² (snappier arc)
+const JUMP_VEL = -0.52;                      // px / ms  (lower, faster jump)
+const FAST_FALL = 0.0044;
 const INIT_SPEED = 0.3;                      // px / ms
 const MAX_SPEED  = 0.85;
 const ACCEL      = 0.000008;                 // speed increase / ms
 const MIN_GAP = 400, MAX_GAP = 900;          // px between obstacles
 const NIGHT_TOGGLE = 700;                    // score interval
+const METEOR_MIN_INTERVAL = 8000;            // ms min between meteor showers
+const METEOR_MAX_INTERVAL = 18000;           // ms max
+const METEOR_SPEED = 0.35;                   // px/ms diagonal speed
 
 /* ── CANVAS ─────────────────────────────────────────── */
 const canvas = document.getElementById("c");
@@ -308,6 +311,51 @@ let stars = [];
 for(let i=0;i<12;i++) stars.push({x:Math.random()*DESIGN_W, y:5+Math.random()*80});
 let moonX = 600;
 
+/* ── METEORS ────────────────────────────────────────── */
+let meteors = [];
+let meteorTimer = 5000 + Math.random() * 8000; // first meteor delay
+
+// Meteor bitmap 8×10
+const meteorBitmap = [
+  "00011100",
+  "00111110",
+  "01111111",
+  "11111111",
+  "11111111",
+  "11111111",
+  "01111111",
+  "01111110",
+  "00111110",
+  "00011100",
+];
+// Meteor trail particle
+const trailBitmap = [
+  "011",
+  "111",
+  "011",
+];
+
+function spawnMeteorShower(){
+  // spawn 2-5 meteors in quick succession across the screen width
+  const count = 2 + Math.floor(Math.random()*4);
+  for(let i=0;i<count;i++){
+    const delay = i * (150 + Math.random()*250); // staggered
+    const startX = 200 + Math.random()*(DESIGN_W - 100);
+    meteors.push({
+      x: startX,
+      y: -20 - Math.random()*40,
+      vx: -(0.12 + Math.random()*0.08),  // slight leftward drift  
+      vy: METEOR_SPEED + Math.random()*0.15,
+      w: 16, h: 20,
+      delay: delay,
+      active: false,
+      trail: [],
+      rotation: Math.random()*0.5 - 0.25,
+    });
+  }
+  meteorTimer = METEOR_MIN_INTERVAL + Math.random()*(METEOR_MAX_INTERVAL - METEOR_MIN_INTERVAL);
+}
+
 /* ── OBSTACLES ──────────────────────────────────────── */
 let obstacles = [];
 let nextObsDist = 0;
@@ -372,6 +420,8 @@ function startGame(){
   score = 0; dist = 0;
   nightMode = false; nightAlpha = 0;
   obstacles = [];
+  meteors = [];
+  meteorTimer = 5000 + Math.random() * 8000;
   nextObsDist = 300;
   groundX = 0;
   resetDino();
@@ -428,8 +478,10 @@ function handleAction(action){
 }
 
 function doJump(){
-  if(!dino.jumping && dino.y >= GROUND_Y){
+  // Allow jump when on the ground (even the exact frame of landing)
+  if(dino.y >= GROUND_Y){
     dino.jumping = true;
+    dino.y = GROUND_Y; // snap to ground
     dino.vy = JUMP_VEL;
     dino.ducking = false;
     beep(400, 0.05);
@@ -495,6 +547,24 @@ function update(dt){
   clouds = clouds.filter(c => c.x > -60);
   if(clouds.length < 4 && Math.random() < 0.001*dt) spawnCloud();
 
+  // Meteors
+  if(score > 150){
+    meteorTimer -= dt;
+    if(meteorTimer <= 0) spawnMeteorShower();
+  }
+  for(const m of meteors){
+    if(m.delay > 0){ m.delay -= dt; continue; }
+    m.active = true;
+    m.x += m.vx * dt;
+    m.y += m.vy * dt;
+    // trail particles
+    m.trail.push({x: m.x + 4, y: m.y - 4, life: 300});
+    if(m.trail.length > 8) m.trail.shift();
+    for(const t of m.trail) t.life -= dt;
+    m.trail = m.trail.filter(t => t.life > 0);
+  }
+  meteors = meteors.filter(m => m.y < DESIGN_H + 40);
+
   // Obstacles
   nextObsDist -= speed * dt;
   if(nextObsDist <= 0) spawnObstacle();
@@ -514,6 +584,15 @@ function update(dt){
   const dBox = {x:dx, y:dy, w:dw, h:dh};
   for(const o of obstacles){
     if(collides(dBox, o)){
+      gameOver();
+      return;
+    }
+  }
+  // Meteor collision
+  for(const m of meteors){
+    if(!m.active) continue;
+    const mBox = {x:m.x+2, y:m.y+2, w:m.w-4, h:m.h-4};
+    if(collides(dBox, mBox)){
       gameOver();
       return;
     }
@@ -578,6 +657,44 @@ function draw(){
       drawBitmap(o.frame===0 ? ptero1 : ptero2, o.x, o.y, 2, fgColor);
     } else {
       drawBitmap(OBS_TYPES[o.type].bitmap, o.x, o.y, 2, fgColor);
+    }
+  }
+
+  // Meteors
+  const meteorColor = lerpColor("#cc3300","#ff6633", nightAlpha||0);
+  const trailColor  = lerpColor("#ff9955","#ff6622", nightAlpha||0);
+  for(const m of meteors){
+    if(!m.active) continue;
+    // trail glow
+    for(const t of m.trail){
+      const alpha = Math.max(0, t.life / 300);
+      ctx.globalAlpha = alpha * 0.6;
+      drawBitmap(trailBitmap, t.x, t.y, 2, trailColor);
+    }
+    ctx.globalAlpha = 1;
+    // meteor body
+    drawBitmap(meteorBitmap, m.x, m.y, 2, meteorColor);
+    // bright core
+    ctx.fillStyle = lerpColor("#ffcc00","#ffee66", nightAlpha||0);
+    ctx.fillRect(m.x+6, m.y+6, 6, 6);
+  }
+  ctx.globalAlpha = 1;
+
+  // Meteor warning indicator
+  if(state === STATE.PLAYING){
+    for(const m of meteors){
+      if(!m.active || m.y > 0) continue;
+      // show a small downward arrow at m.x at top of screen
+      ctx.fillStyle = meteorColor;
+      ctx.globalAlpha = 0.7;
+      const ax = Math.max(4, Math.min(DESIGN_W-12, m.x+4));
+      ctx.beginPath();
+      ctx.moveTo(ax,   4);
+      ctx.lineTo(ax+8, 4);
+      ctx.lineTo(ax+4, 12);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
     }
   }
 
